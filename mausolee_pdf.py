@@ -21,7 +21,40 @@ Utilizare:
 
 import argparse
 import sys
+import os
+import time
 from io import BytesIO
+
+# ---------------------------------------------------------------------------
+# Forțează UTF-8 la stdout/stderr ÎNAINTE de orice print(),
+# ca diacriticele românești să nu mai provoace UnicodeEncodeError
+# pe Windows (cp1252) sau în alte medii cu encoding implicit restrictiv.
+# ---------------------------------------------------------------------------
+def _force_utf8_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        # Fallback pentru Python < 3.7 sau stream-uri fără reconfigure()
+        elif hasattr(stream, "buffer"):
+            try:
+                import io
+                wrapped = io.TextIOWrapper(
+                    stream.buffer, encoding="utf-8", errors="replace",
+                    line_buffering=True,
+                )
+                setattr(sys, stream_name, wrapped)
+            except Exception:
+                pass
+
+
+_force_utf8_stdio()
 
 import requests
 
@@ -31,6 +64,8 @@ try:
     from reportlab.lib.units import cm
     from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
     from reportlab.lib.colors import HexColor, grey
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.platypus import (
         BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer,
         PageBreak, KeepTogether, NextPageTemplate, Image,
@@ -156,7 +191,7 @@ MAUSOLEUMS = [
 def fetch_wikipedia_summary(wiki_title: str, language: str = "ro") -> str | None:
     try:
         wiki = wikipediaapi.Wikipedia(
-            user_agent="GeneratorMausoleePDF/1.0 (proiect educațional)",
+            user_agent="GeneratorMausoleePDF/1.0 (educational project)",
             language=language,
         )
         page = wiki.page(wiki_title)
@@ -175,10 +210,10 @@ def fetch_wikipedia_summary(wiki_title: str, language: str = "ro") -> str | None
 # Preluare imagine din Wikimedia Commons (API MediaWiki, fără cheie)
 # ---------------------------------------------------------------------------
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
-HEADERS = {"User-Agent": "GeneratorMausoleePDF/1.0 (proiect educațional)"}
+HEADERS = {"User-Agent": "GeneratorMausoleePDF/1.0 (educational project)"}
 
 
-def _commons_thumb_for_file(filename: str, width: int = 1200) -> str | None:
+def _commons_thumb_for_file(filename: str, width: int = 800) -> str | None:
     params = {
         "action": "query",
         "titles": f"File:{filename}",
@@ -208,7 +243,7 @@ def fetch_lead_image_url(wiki_title: str, language: str = "ro") -> str | None:
         "titles": wiki_title,
         "prop": "pageimages",
         "piprop": "name|original",
-        "pithumbsize": 1200,
+        "pithumbsize": 800,
         "format": "json",
         "redirects": 1,
     }
@@ -217,13 +252,17 @@ def fetch_lead_image_url(wiki_title: str, language: str = "ro") -> str | None:
         r.raise_for_status()
         pages = r.json().get("query", {}).get("pages", {})
         for _, page in pages.items():
-            original = page.get("original", {}).get("source")
-            thumb = page.get("thumbnail", {}).get("source")
-            if thumb or original:
-                return thumb or original
             name = page.get("pageimage")
             if name:
-                return _commons_thumb_for_file(name)
+                thumb = _commons_thumb_for_file(name, width=800)
+                if thumb:
+                    return thumb
+            original = page.get("original", {}).get("source")
+            thumb = page.get("thumbnail", {}).get("source")
+            if thumb:
+                return thumb
+            if original:
+                return original
     except Exception as exc:
         print(f"  [avertisment] căutarea imaginii Wikipedia a eșuat "
               f"pentru '{wiki_title}': {exc}")
@@ -231,26 +270,34 @@ def fetch_lead_image_url(wiki_title: str, language: str = "ro") -> str | None:
 
 
 def download_image(url: str, max_bytes: int = 12 * 1024 * 1024):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=30, stream=True)
-        r.raise_for_status()
-        buf = BytesIO()
-        total = 0
-        for chunk in r.iter_content(8192):
-            total += len(chunk)
-            if total > max_bytes:
-                print("  [avertisment] imaginea este prea mare, se sare peste")
-                return None
-            buf.write(chunk)
-        buf.seek(0)
-        img = PILImage.open(buf)
-        img.load()
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        return img
-    except Exception as exc:
-        print(f"  [avertisment] descărcarea imaginii a eșuat: {exc}")
-        return None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30, stream=True)
+            if r.status_code == 429:
+                raise requests.HTTPError(f"429 Client Error: Too Many Requests for {url}")
+            r.raise_for_status()
+            buf = BytesIO()
+            total = 0
+            for chunk in r.iter_content(8192):
+                total += len(chunk)
+                if total > max_bytes:
+                    print("  [avertisment] imaginea este prea mare, se sare peste")
+                    return None
+                buf.write(chunk)
+            buf.seek(0)
+            img = PILImage.open(buf)
+            img.load()
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            return img
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            print(f"  [avertisment] descărcarea imaginii a eșuat: {exc}")
+    return None
 
 
 def make_reportlab_image(pil_img, max_w_cm: float, max_h_cm: float) -> Image:
@@ -292,6 +339,7 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
         img_url = fetch_lead_image_url(m["wiki_title"], language)
         img = None
         if img_url:
+            time.sleep(1)
             img = download_image(img_url)
         if img is not None:
             print(f"    imagine: OK ({img.size[0]}x{img.size[1]} px)")
@@ -300,33 +348,66 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
 
         entries.append({**m, "body": text, "image": img})
 
+    font_sets = (
+        (os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"),
+         ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf")),
+        ("/usr/share/fonts/truetype/dejavu",
+         ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf",
+          "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf")),
+        ("/usr/share/fonts/truetype/liberation2",
+         ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf",
+          "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf")),
+        ("/Library/Fonts",
+         ("Arial.ttf", "Arial Bold.ttf", "Arial Italic.ttf",
+          "Arial Bold Italic.ttf")),
+        ("/System/Library/Fonts/Supplemental",
+         ("Arial.ttf", "Arial Bold.ttf", "Arial Italic.ttf",
+          "Arial Bold Italic.ttf")),
+    )
+    font_paths = next(
+        ([os.path.join(font_dir, name) for name in filenames]
+         for font_dir, filenames in font_sets
+         if all(os.path.isfile(os.path.join(font_dir, name))
+                for name in filenames)),
+        None,
+    )
+    if font_paths is None:
+        raise RuntimeError(
+            "Nu a fost găsit un font TrueType cu suport pentru diacritice "
+            "românești (Arial, DejaVu Sans sau Liberation Sans).")
+    for font_name, font_path in zip(
+            ("MausoleeSans", "MausoleeSans-Bold", "MausoleeSans-Italic",
+             "MausoleeSans-BoldItalic"), font_paths):
+        if font_name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(font_name, font_path))
+
     # ---- Stiluri --------------------------------------------------------
     styles = getSampleStyleSheet()
     cover_title = ParagraphStyle(
-        "CoverTitle", parent=styles["Title"], fontName="Helvetica-Bold",
+        "CoverTitle", parent=styles["Title"], fontName="MausoleeSans-Bold",
         fontSize=28, leading=34, alignment=TA_CENTER,
         textColor=HexColor("#f0f0f0"),
     )
     cover_sub = ParagraphStyle(
-        "CoverSub", parent=styles["Normal"], fontName="Helvetica",
+        "CoverSub", parent=styles["Normal"], fontName="MausoleeSans",
         fontSize=13, leading=17, alignment=TA_CENTER,
         textColor=HexColor("#b0b0d0"),
     )
     h_style = ParagraphStyle(
-        "H1", parent=styles["Heading1"], fontName="Helvetica-Bold",
+        "H1", parent=styles["Heading1"], fontName="MausoleeSans-Bold",
         fontSize=17, leading=21, spaceAfter=2,
         textColor=HexColor("#16213e"),
     )
     loc_style = ParagraphStyle(
-        "Loc", parent=styles["Normal"], fontName="Helvetica-Oblique",
+        "Loc", parent=styles["Normal"], fontName="MausoleeSans-Italic",
         fontSize=10, leading=13, spaceAfter=6, textColor=grey,
     )
     body_style = ParagraphStyle(
-        "Body", parent=styles["Normal"], fontName="Helvetica",
+        "Body", parent=styles["Normal"], fontName="MausoleeSans",
         fontSize=10.2, leading=14.5, alignment=TA_JUSTIFY, spaceAfter=6,
     )
     caption_style = ParagraphStyle(
-        "Caption", parent=styles["Normal"], fontName="Helvetica-Oblique",
+        "Caption", parent=styles["Normal"], fontName="MausoleeSans-Italic",
         fontSize=8.5, leading=11, alignment=TA_CENTER, textColor=grey,
         spaceBefore=2, spaceAfter=6,
     )
@@ -401,6 +482,8 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
 
 
 def main():
+    # Cei care redirecționează stdout pe Windows primesc în continuare
+    # UTF-8 datorită _force_utf8_stdio() de la început.
     p = argparse.ArgumentParser(
         description="Generează un PDF (cu fotografii) despre cinci mausolee "
                     "ale lumii, în limba română.")
