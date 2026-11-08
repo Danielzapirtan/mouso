@@ -68,7 +68,7 @@ try:
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.platypus import (
         BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer,
-        PageBreak, KeepTogether, NextPageTemplate, Image,
+        PageBreak, KeepTogether, NextPageTemplate, Image, Table,
     )
     from PIL import Image as PILImage
 except ImportError as e:
@@ -421,21 +421,21 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
     )
     h_style = ParagraphStyle(
         "H1", parent=styles["Heading1"], fontName="MausoleeSans-Bold",
-        fontSize=17, leading=21, spaceAfter=2,
+        fontSize=15, leading=18, spaceAfter=1,
         textColor=HexColor("#16213e"),
     )
     loc_style = ParagraphStyle(
         "Loc", parent=styles["Normal"], fontName="MausoleeSans-Italic",
-        fontSize=10, leading=13, spaceAfter=6, textColor=grey,
+        fontSize=9, leading=11, spaceAfter=3, textColor=grey,
     )
     body_style = ParagraphStyle(
         "Body", parent=styles["Normal"], fontName="MausoleeSans",
-        fontSize=10.2, leading=14.5, alignment=TA_JUSTIFY, spaceAfter=6,
+        fontSize=9.2, leading=12.2, alignment=TA_JUSTIFY, spaceAfter=0,
     )
     caption_style = ParagraphStyle(
         "Caption", parent=styles["Normal"], fontName="MausoleeSans-Italic",
-        fontSize=8.5, leading=11, alignment=TA_CENTER, textColor=grey,
-        spaceBefore=2, spaceAfter=6,
+        fontSize=7.5, leading=9, alignment=TA_CENTER, textColor=grey,
+        spaceBefore=2, spaceAfter=3,
     )
 
     def cover_page(canvas, doc):
@@ -469,24 +469,60 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
     ))
     story.append(PageBreak())
 
-    for idx, e in enumerate(entries):
-        block = [Paragraph(e["title"], h_style),
-                 Paragraph(e["subtitle"], loc_style)]
-
-        if e["image"] is not None:
-            img_flow = make_reportlab_image(e["image"], max_w_cm=15.5, max_h_cm=9.5)
-            block.append(img_flow)
-            block.append(Paragraph("Fotografie: Wikimedia Commons", caption_style))
-
+    def entry_text(e):
+        content = [
+            Paragraph(e["title"], h_style),
+            Paragraph(e["subtitle"], loc_style),
+        ]
         for para in [p.strip() for p in e["body"].split("\n") if p.strip()]:
             safe = (para.replace("&", "&amp;")
                          .replace("<", "&lt;")
                          .replace(">", "&gt;"))
-            block.append(Paragraph(safe, body_style))
+            content.append(Paragraph(safe, body_style))
+        return content
 
-        story.append(KeepTogether(block))
-        if idx < len(entries) - 1:
-            story.append(PageBreak())
+    def paired_entry(e):
+        image_cell = []
+        if e["image"] is not None:
+            image_cell = [
+                make_reportlab_image(e["image"], max_w_cm=4.7, max_h_cm=5.5),
+                Paragraph("Fotografie: Wikimedia Commons", caption_style),
+            ]
+        else:
+            image_cell = [Spacer(1, 0.1 * cm)]
+        return Table(
+            [[image_cell, entry_text(e)]],
+            colWidths=[5.0 * cm, 11.6 * cm],
+            style=[
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), 8),
+            ],
+        )
+
+    for start in (0, 2):
+        story.append(KeepTogether([
+            paired_entry(entries[start]),
+            Spacer(1, 0.6 * cm),
+            paired_entry(entries[start + 1]),
+        ]))
+        story.append(PageBreak())
+
+    last = entries[4]
+    last_block = [
+        Paragraph(last["title"], h_style),
+        Paragraph(last["subtitle"], loc_style),
+    ]
+    if last["image"] is not None:
+        last_block.extend([
+            make_reportlab_image(last["image"], max_w_cm=12, max_h_cm=5.5),
+            Paragraph("Fotografie: Wikimedia Commons", caption_style),
+        ])
+    last_block.extend(entry_text(last)[2:])
+    story.append(KeepTogether(last_block))
 
     # ---- Construire -----------------------------------------------------
     doc = MausoleumPDF(
