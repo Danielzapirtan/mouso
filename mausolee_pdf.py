@@ -92,6 +92,7 @@ MAUSOLEUMS = [
         "title": "Mausoleul Primului Împărat Qin",
         "subtitle": "Lintong, Shaanxi, China",
         "wiki_title": "Mausoleul Împăratului Qin Shi Huang",
+        "commons_search": "Qin Shi Huang Mausoleum",
         "fallback_text": (
             "Mausoleul Primului Împărat Qin, situat lângă Xi'an, în provincia "
             "Shaanxi din China, a fost construit între 246 î.Hr. și 208 î.Hr. "
@@ -269,6 +270,29 @@ def fetch_lead_image_url(wiki_title: str, language: str = "ro") -> str | None:
     return None
 
 
+def search_commons_image_url(query: str, width: int = 800) -> str | None:
+    params = {
+        "action": "query",
+        "list": "search",
+        "srsearch": query,
+        "srnamespace": 6,
+        "srlimit": 1,
+        "format": "json",
+    }
+    try:
+        r = requests.get(COMMONS_API, params=params, headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        results = r.json().get("query", {}).get("search", [])
+        if results:
+            filename = results[0].get("title", "").removeprefix("File:")
+            if filename:
+                return _commons_thumb_for_file(filename, width)
+    except Exception as exc:
+        print(f"  [avertisment] căutarea imaginii pe Commons a eșuat "
+              f"pentru '{query}': {exc}")
+    return None
+
+
 def download_image(url: str, max_bytes: int = 12 * 1024 * 1024):
     last_exc = None
     for attempt in range(3):
@@ -337,6 +361,8 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
             print(f"    text: Wikipedia ({len(text)} caractere)")
 
         img_url = fetch_lead_image_url(m["wiki_title"], language)
+        if not img_url and m.get("commons_search"):
+            img_url = search_commons_image_url(m["commons_search"])
         img = None
         if img_url:
             time.sleep(1)
