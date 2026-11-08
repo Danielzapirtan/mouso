@@ -111,6 +111,15 @@ MAUSOLEUMS = [
         "title": "Taj Mahal",
         "subtitle": "Agra, Uttar Pradesh, India",
         "wiki_title": "Taj Mahal",
+        "facts": [
+            ("Comandat de", "Shah Jahan, împăratul mogul"),
+            ("Ridicat în memoria", "Mumtaz Mahal, soția sa"),
+            ("Material dominant", "Marmură albă translucidă, adusă din Makrana, Rajasthan"),
+            ("Structură", "Cărămidă și mortar, placate cu marmură"),
+            ("Incrustații", "Pietre semiprețioase: lapis lazuli, jad, turcoaz, agat și jasp"),
+            ("Tehnică decorativă", "Pietra dura: pietre șlefuite și fixate în marmură"),
+            ("Clădiri auxiliare", "Gresie roșie și marmură în ansamblul complexului"),
+        ],
         "fallback_text": (
             "Taj Mahal este un mausoleu de marmură albă-ivorie situat pe malul "
             "sudic al fluviului Yamuna, în Agra, India. A fost comandat în 1631 "
@@ -412,36 +421,45 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
     cover_title = ParagraphStyle(
         "CoverTitle", parent=styles["Title"], fontName="MausoleeSans-Bold",
         fontSize=28, leading=34, alignment=TA_CENTER,
-        textColor=HexColor("#f0f0f0"),
+        textColor=HexColor("#16213e"),
     )
     cover_sub = ParagraphStyle(
         "CoverSub", parent=styles["Normal"], fontName="MausoleeSans",
         fontSize=13, leading=17, alignment=TA_CENTER,
-        textColor=HexColor("#b0b0d0"),
+        textColor=HexColor("#59657d"),
     )
     h_style = ParagraphStyle(
         "H1", parent=styles["Heading1"], fontName="MausoleeSans-Bold",
-        fontSize=15, leading=18, spaceAfter=1,
+        fontSize=17, leading=20, spaceAfter=2,
         textColor=HexColor("#16213e"),
     )
     loc_style = ParagraphStyle(
         "Loc", parent=styles["Normal"], fontName="MausoleeSans-Italic",
-        fontSize=9, leading=11, spaceAfter=3, textColor=grey,
+        fontSize=9.5, leading=12, spaceAfter=5, textColor=grey,
     )
     body_style = ParagraphStyle(
         "Body", parent=styles["Normal"], fontName="MausoleeSans",
-        fontSize=9.2, leading=12.2, alignment=TA_JUSTIFY, spaceAfter=0,
+        fontSize=10, leading=13.5, alignment=TA_JUSTIFY, spaceAfter=0,
     )
     caption_style = ParagraphStyle(
         "Caption", parent=styles["Normal"], fontName="MausoleeSans-Italic",
-        fontSize=7.5, leading=9, alignment=TA_CENTER, textColor=grey,
+        fontSize=8, leading=10, alignment=TA_CENTER, textColor=grey,
         spaceBefore=2, spaceAfter=3,
+    )
+    fact_label_style = ParagraphStyle(
+        "FactLabel", parent=styles["Normal"], fontName="MausoleeSans-Bold",
+        fontSize=8.2, leading=10.2, textColor=HexColor("#16213e"),
+    )
+    fact_value_style = ParagraphStyle(
+        "FactValue", parent=styles["Normal"], fontName="MausoleeSans",
+        fontSize=8.2, leading=10.2,
     )
 
     def cover_page(canvas, doc):
         canvas.saveState()
-        canvas.setFillColor(HexColor("#16213e"))
-        canvas.rect(0, 0, A4[0], A4[1], fill=1, stroke=0)
+        canvas.setFillColor(HexColor("#e9edf4"))
+        canvas.roundRect(1.3 * cm, 1.3 * cm, A4[0] - 2.6 * cm,
+                         A4[1] - 2.6 * cm, 12, fill=1, stroke=0)
         canvas.restoreState()
 
     def content_page(canvas, doc):
@@ -467,6 +485,12 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
         "din China, India, România, Franța și Rusia",
         cover_sub,
     ))
+    story.append(Spacer(1, 3 * cm))
+    story.append(Paragraph(
+        "CHINA&nbsp;&nbsp; · &nbsp;&nbsp;INDIA&nbsp;&nbsp; · &nbsp;&nbsp;"
+        "ROMÂNIA&nbsp;&nbsp; · &nbsp;&nbsp;FRANȚA&nbsp;&nbsp; · &nbsp;&nbsp;RUSIA",
+        cover_sub,
+    ))
     story.append(PageBreak())
 
     def entry_text(e):
@@ -475,39 +499,64 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
             Paragraph(e["subtitle"], loc_style),
         ]
         for para in [p.strip() for p in e["body"].split("\n") if p.strip()]:
+            if para.startswith("==") and para.endswith("=="):
+                continue
             safe = (para.replace("&", "&amp;")
                          .replace("<", "&lt;")
                          .replace(">", "&gt;"))
             content.append(Paragraph(safe, body_style))
+        if e.get("facts"):
+            fact_rows = [
+                [Paragraph(label, fact_label_style),
+                 Paragraph(value, fact_value_style)]
+                for label, value in e["facts"]
+            ]
+            content.append(Spacer(1, 0.2 * cm))
+            content.append(Table(
+                fact_rows,
+                colWidths=[3.1 * cm, 6.5 * cm],
+                style=[
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("BACKGROUND", (0, 0), (0, -1), HexColor("#edf1f7")),
+                    ("GRID", (0, 0), (-1, -1), 0.35, HexColor("#d5dce8")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ],
+            ))
         return content
 
     def paired_entry(e):
         image_cell = []
         if e["image"] is not None:
             image_cell = [
-                make_reportlab_image(e["image"], max_w_cm=4.7, max_h_cm=5.5),
+                make_reportlab_image(e["image"], max_w_cm=6.5, max_h_cm=7.5),
                 Paragraph("Fotografie: Wikimedia Commons", caption_style),
             ]
         else:
             image_cell = [Spacer(1, 0.1 * cm)]
         return Table(
             [[image_cell, entry_text(e)]],
-            colWidths=[5.0 * cm, 11.6 * cm],
+            colWidths=[7.0 * cm, 9.6 * cm],
+            minRowHeights=[9.4 * cm],
             style=[
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 0),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 0),
                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (0, 0), 8),
+                ("RIGHTPADDING", (0, 0), (0, 0), 10),
             ],
         )
 
     for start in (0, 2):
         story.append(KeepTogether([
+            Spacer(1, 1.2 * cm),
             paired_entry(entries[start]),
-            Spacer(1, 0.6 * cm),
+            Spacer(1, 1.2 * cm),
             paired_entry(entries[start + 1]),
+            Spacer(1, 1.2 * cm),
         ]))
         story.append(PageBreak())
 
@@ -518,7 +567,7 @@ def build_pdf(output_path: str, language: str = "ro") -> None:
     ]
     if last["image"] is not None:
         last_block.extend([
-            make_reportlab_image(last["image"], max_w_cm=12, max_h_cm=5.5),
+            make_reportlab_image(last["image"], max_w_cm=13, max_h_cm=6.5),
             Paragraph("Fotografie: Wikimedia Commons", caption_style),
         ])
     last_block.extend(entry_text(last)[2:])
